@@ -31,13 +31,13 @@ try:
     with open(CONFIG_PATH) as f:
         config = json.load(f)
     F5_PATH = config.get("f5Path", _F5_DEFAULT)
-    VPN_HOST = config.get("vpnHost", "vpn.trendmicro.com")
+    VPN_HOST = config.get("vpnHost", "vpn.example.com")
     EMAIL = config.get("userEmail", "")
     CANARY = config.get("canaryToken", "")
 except Exception as e:
     print(f"Config error: {e}")
     F5_PATH = _F5_DEFAULT
-    VPN_HOST = "vpn.trendmicro.com"
+    VPN_HOST = "vpn.example.com"
     EMAIL = ""
     CANARY = ""
 
@@ -484,7 +484,19 @@ def email_mfa_info(number):
         log("No MFA number to email", "WARN")
         return False
     try:
-        sys.path.insert(0, os.path.expanduser('~/Documents/ProjectsCL1/_tmemu/msgraph-lib'))
+        msgraph_path = config.get("msgraphLibPath", "") if 'config' in dir() else ""
+        if not msgraph_path:
+            # Search common locations
+            for candidate in [
+                os.path.expanduser("~/Documents/ProjectsCL1/_tmemu/msgraph-lib"),
+                os.path.expanduser("~/Documents/ProjectsCL1/msgraph-lib"),
+                str(SCRIPT_DIR.parent / "msgraph-lib"),
+            ]:
+                if os.path.isdir(candidate):
+                    msgraph_path = candidate
+                    break
+        if msgraph_path:
+            sys.path.insert(0, msgraph_path)
         from token_manager import graph_post
     except Exception as e:
         log(f"Cannot load msgraph-lib: {e}", "WARN")
