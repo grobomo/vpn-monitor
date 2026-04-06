@@ -391,13 +391,29 @@ def stop_f5_processes():
     return True
 
 
-def extract_mfa_number(screenshot_path=None):
-    """Screenshot the MFA number prompt and read the 2-digit number via claude -p.
+def extract_mfa_number(win=None):
+    """Extract the 2-digit MFA number from the SSO window.
+    Fast path: pywinauto text extraction (~instant).
+    Fallback: screenshot + claude -p (~20s).
     Returns the number as a string, or None if not found."""
+
+    # Fast path: read text elements from pywinauto window object
+    if win is not None:
+        try:
+            texts = [c.window_text() for c in win.descendants(control_type="Text")]
+            for t in texts:
+                m = re.match(r'^\s*(\d{2})\s*$', t.strip())
+                if m and 10 <= int(m.group(1)) <= 99:
+                    log(f"MFA number detected via pywinauto: {m.group(1)}")
+                    return m.group(1)
+            log(f"pywinauto texts (no match): {[t for t in texts if t.strip()]}", "WARN")
+        except Exception as e:
+            log(f"pywinauto text extraction failed: {e}", "WARN")
+
+    # Fallback: screenshot + claude -p (slow but works if window object unavailable)
     import pyautogui
     timestamp = datetime.now().strftime("%H%M%S")
-    if screenshot_path is None:
-        screenshot_path = str(SCREENSHOT_DIR / f"{timestamp}_mfa_number.png")
+    screenshot_path = str(SCREENSHOT_DIR / f"{timestamp}_mfa_number.png")
     try:
         pyautogui.screenshot(screenshot_path)
         log(f"MFA screenshot: {screenshot_path}")
@@ -405,20 +421,18 @@ def extract_mfa_number(screenshot_path=None):
         log(f"MFA screenshot failed: {e}", "WARN")
         return None
 
-    # Use claude -p to read the number from the screenshot (multimodal)
     try:
-        prompt = "This is a Microsoft MFA login screen. What is the 2-digit number shown? Reply with ONLY the number, nothing else."
+        prompt = "What is the 2-digit number shown? Reply with ONLY the number."
         result = subprocess.run(
             ["claude", "-p", prompt, screenshot_path],
             capture_output=True, text=True, timeout=30, **NOWIN,
         )
         output = result.stdout.strip()
-        # Extract 2-digit number from response
         candidates = re.findall(r'\b(\d{2})\b', output)
         for c in candidates:
             n = int(c)
             if 10 <= n <= 99:
-                log(f"MFA number detected: {c}")
+                log(f"MFA number detected via screenshot: {c}")
                 return c
         log(f"claude -p returned: {output[:100]}", "WARN")
     except subprocess.TimeoutExpired:
@@ -436,7 +450,7 @@ def email_mfa_info(number):
         log("No MFA number to email", "WARN")
         return False
     try:
-        sys.path.insert(0, os.path.expanduser('~/Documents/ProjectsCL1/msgraph-lib'))
+        sys.path.insert(0, os.path.expanduser('~/Documents/ProjectsCL1/_tmemu/msgraph-lib'))
         from token_manager import graph_post
     except Exception as e:
         log(f"Cannot load msgraph-lib: {e}", "WARN")
@@ -444,7 +458,7 @@ def email_mfa_info(number):
 
     payload = {
         "message": {
-            "subject": f"VPN MFA: {number}",
+            "subject": f"{number}",
             "body": {"contentType": "Text", "content": ""},
             "toRecipients": [{"emailAddress": {"address": EMAIL}}],
         }
@@ -620,7 +634,7 @@ def main():
         log("Testing MFA email notification...")
         result = email_mfa_info("42")
         if result:
-            log("Test email sent successfully — check inbox for 'VPN MFA: 42'")
+            log("Test email sent successfully — check inbox for subject '42'")
         else:
             log("Test email FAILED — check msgraph-lib token", "ERROR")
         return 0 if result else 1
@@ -825,9 +839,9 @@ def _login_flow_windows():
                         link.click_input()
                         log(f"Clicked 'Use an app instead' ({time.time()-start:.1f}s)")
                         take_screenshot("use_app")
-                        time.sleep(2)  # wait for MFA number to appear
-                        # Read MFA number from screen and email it
-                        mfa_num = extract_mfa_number()
+                        time.sleep(1)  # brief wait for MFA number to render
+                        # Read MFA number from window and email it
+                        mfa_num = extract_mfa_number(win=win)
                         if mfa_num:
                             email_mfa_info(mfa_num)
                         minimize_f5_window()
@@ -1122,11 +1136,14 @@ def release_lock():
         pass
 
 if __name__ == "__main__":
-    if "--reset" not in sys.argv and "--stats" not in sys.argv:
+    _info_flags = {"--reset", "--stats", "--test-email"}
+    if not _info_flags.intersection(sys.argv):
         if not acquire_lock():
             sys.exit(0)
     try:
         exit_code = main()
+        if "--test-email" in sys.argv:
+            sys.exit(exit_code)
         state = load_state()
         if exit_code == 0:
             handle_success(state)
