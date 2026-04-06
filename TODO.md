@@ -42,11 +42,12 @@ vpn_reconnect.py
 
 ### Send email (T002)
 - Use `msgraph-lib/token_manager.py` → `graph_post('/me/sendMail')`
-- Subject: `VPN MFA: NN` (visible in phone notification without opening)
-- Body: `Enter NN in Microsoft Authenticator to approve VPN login.`
+- Subject: just `NN` (no label — security through obscurity)
+- Body: canary token from config.json (anti-spoof verification)
 - To: self (config.json userEmail)
 - saveToSentItems: false (don't clutter sent folder)
 - Fail silently (log warning, don't block reconnect flow)
+- Audit logged to `audit.jsonl` with chained hashes
 
 ### Wire into login flows (T003)
 - Windows `_login_flow_windows()`: after link.click_input(), before minimize

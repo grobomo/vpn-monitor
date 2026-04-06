@@ -36,6 +36,7 @@ try:
     CANARY = config.get("canaryToken", "")
 except Exception as e:
     print(f"Config error: {e}")
+    config = {}
     F5_PATH = _F5_DEFAULT
     VPN_HOST = "vpn.example.com"
     EMAIL = ""
@@ -424,13 +425,21 @@ def stop_f5_processes():
     return True
 
 
-def extract_mfa_number(win=None):
+def extract_mfa_number(win=None, page_text=None):
     """Extract the 2-digit MFA number from the SSO window.
-    Fast path: pywinauto text extraction (~instant).
+    Fast path: pywinauto text extraction or browser page text (~instant).
     Fallback: screenshot + claude -p (~20s).
     Returns the number as a string, or None if not found."""
 
-    # Fast path: read text elements from pywinauto window object
+    # Fast path (macOS): regex on browser page text
+    if page_text:
+        for m in re.finditer(r'\b(\d{2})\b', page_text):
+            n = int(m.group(1))
+            if 10 <= n <= 99:
+                log(f"MFA number detected via page text: {m.group(1)}")
+                return m.group(1)
+
+    # Fast path (Windows): read text elements from pywinauto window object
     if win is not None:
         try:
             texts = [c.window_text() for c in win.descendants(control_type="Text")]
@@ -507,7 +516,8 @@ def email_mfa_info(number):
             "subject": f"{number}",
             "body": {"contentType": "Text", "content": CANARY},
             "toRecipients": [{"emailAddress": {"address": EMAIL}}],
-        }
+        },
+        "saveToSentItems": False,
     }
 
     try:
@@ -1016,9 +1026,10 @@ def _login_flow_mac():
                 _mac_click_link(browser_app, "Use an app instead")
                 log(f"Clicked 'Use an app instead' ({time.time()-start:.1f}s)")
                 take_screenshot("use_app")
-                time.sleep(2)  # wait for MFA number to appear
-                # Read MFA number from screen and email it
-                mfa_num = extract_mfa_number()
+                time.sleep(1)  # brief wait for MFA number to render
+                # Read MFA number from browser text and email it
+                mfa_text = _mac_get_browser_text(browser_app)
+                mfa_num = extract_mfa_number(page_text=mfa_text)
                 if mfa_num:
                     email_mfa_info(mfa_num)
                 stage = "wait"
