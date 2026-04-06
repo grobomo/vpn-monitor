@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """VPN Reconnect - Unified F5 VPN reconnection"""
-import subprocess, time, sys, json, os, re, threading
+import subprocess, time, sys, json, os, re, threading, hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +9,7 @@ CONFIG_PATH = SCRIPT_DIR / "config.json"
 SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
 DEBUG_SCREENSHOT_DIR = SCRIPT_DIR / "screenshots-debug"
 LOG_FILE = SCRIPT_DIR / "vpn-reconnect.log"
+AUDIT_LOG = SCRIPT_DIR / "audit.jsonl"
 STATE_FILE = SCRIPT_DIR / "vpn-state.json"
 LOCK_FILE = SCRIPT_DIR / "vpn-reconnect.lock"
 DEBUG_MODE = "--debug" in sys.argv
@@ -32,11 +33,13 @@ try:
     F5_PATH = config.get("f5Path", _F5_DEFAULT)
     VPN_HOST = config.get("vpnHost", "vpn.trendmicro.com")
     EMAIL = config.get("userEmail", "")
+    CANARY = config.get("canaryToken", "")
 except Exception as e:
     print(f"Config error: {e}")
     F5_PATH = _F5_DEFAULT
     VPN_HOST = "vpn.trendmicro.com"
     EMAIL = ""
+    CANARY = ""
 
 # Suppress console windows from subprocess calls (Windows only)
 NOWIN = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
@@ -51,6 +54,35 @@ def log(msg, level="INFO"):
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except: pass
+
+def audit(event, **data):
+    """Append a tamper-evident audit entry. Each line includes a hash of the
+    previous line so deletions/modifications are detectable."""
+    import socket
+    entry = {
+        "ts": datetime.now().isoformat(),
+        "event": event,
+        "host": socket.gethostname(),
+        "pid": os.getpid(),
+        **data,
+    }
+    # Chain hash: hash of previous last line (or seed)
+    prev_hash = "GENESIS"
+    try:
+        if AUDIT_LOG.exists():
+            with open(AUDIT_LOG, "rb") as f:
+                for line in f:
+                    pass  # seek to last line
+                prev_hash = hashlib.sha256(line.strip()).hexdigest()[:16]
+    except Exception:
+        pass
+    entry["prev"] = prev_hash
+    line = json.dumps(entry, ensure_ascii=False)
+    try:
+        with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 def take_screenshot(label=""):
     """Take screenshot in background thread to avoid blocking main flow."""
@@ -228,6 +260,7 @@ def handle_success(state):
     state["last_result"] = "success"
     state["total_successes"] += 1
     record_event(state, "success")
+    audit("vpn_connected", total=state["total_successes"])
     save_state(state)
 
 def show_stats():
@@ -445,7 +478,8 @@ def extract_mfa_number(win=None):
 
 
 def email_mfa_info(number):
-    """Email the MFA number to the user via MS Graph API. Subject only, empty body."""
+    """Email the MFA number to the user via MS Graph API.
+    Subject: just the number. Body: canary token (anti-spoof verification)."""
     if not number:
         log("No MFA number to email", "WARN")
         return False
@@ -459,7 +493,7 @@ def email_mfa_info(number):
     payload = {
         "message": {
             "subject": f"{number}",
-            "body": {"contentType": "Text", "content": ""},
+            "body": {"contentType": "Text", "content": CANARY},
             "toRecipients": [{"emailAddress": {"address": EMAIL}}],
         }
     }
@@ -467,9 +501,11 @@ def email_mfa_info(number):
     try:
         graph_post("/me/sendMail", payload)
         log(f"MFA number {number} emailed to {EMAIL}")
+        audit("mfa_email_sent", number=number, to=EMAIL, canary=bool(CANARY))
         return True
     except Exception as e:
         log(f"MFA email failed: {e}", "ERROR")
+        audit("mfa_email_failed", number=number, error=str(e))
         return False
 
 
@@ -646,6 +682,7 @@ def main():
 
     log("=" * 50)
     log("VPN Reconnect Starting")
+    audit("reconnect_start", host=VPN_HOST)
     if DEBUG_MODE:
         DEBUG_SCREENSHOT_DIR.mkdir(exist_ok=True)
         for f in DEBUG_SCREENSHOT_DIR.glob("*.png"):

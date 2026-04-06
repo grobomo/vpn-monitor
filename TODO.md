@@ -62,10 +62,14 @@ vpn_reconnect.py
 - [x] T001: Extract MFA number from SSO window
 - [x] T002: Send MFA number via email using msgraph-lib
 - [x] T003: Wire into both Windows and macOS login flows
+- [x] T004: Migrate script to grobomo path, update scheduled task via install.py
+- [x] T005: Test email sends successfully (subject: just number, body: canary emoji)
+- [x] T006: Fast pywinauto text extraction (replaces slow screenshot+claude-p)
+- [x] T007: Anti-spoof canary token in email body (config.json, gitignored)
+- [x] T008: Tamper-evident audit log (audit.jsonl with chained hashes)
 
 ## Remaining
-- [ ] T004: Fix scheduled task path — currently points to OLD location:
-  `C:\Users\joelg\OneDrive - TrendMicro\Documents\ProjectsCL\vpn-monitor\vpn_reconnect.py`
-  Must update to: `C:\Users\joelg\Documents\ProjectsCL1\grobomo\vpn-monitor\vpn_reconnect.py`
-  Command: `schtasks /change /tn "VPN Monitor Check" /tr "pythonw.exe <new_path>"`
-- [ ] T005: Test end-to-end: disconnect VPN → task fires → email received → approve → connected
+- [ ] T009: Full end-to-end test: VPN drops → task fires → email with canary → approve → connected
+- [ ] T010: Daily audit log analysis via claude -p (offsite backup + anomaly detection)
+- [ ] T011: system-monitor umbrella project with modules: vpn-monitor, disk-monitor, ioc-monitor
+- [ ] T012: ioc-monitor: Windows Event Log scanning for IOCs (failed logins, new services, suspicious processes)
