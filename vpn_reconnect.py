@@ -493,7 +493,7 @@ def email_mfa_info(number):
         log("No MFA number to email", "WARN")
         return False
     try:
-        msgraph_path = config.get("msgraphLibPath", "") if 'config' in dir() else ""
+        msgraph_path = config.get("msgraphLibPath", "")
         if not msgraph_path:
             # Search common locations
             for candidate in [
