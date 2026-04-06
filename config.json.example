@@ -1,5 +1,9 @@
 {
   "f5Path": "C:\\Program Files (x86)\\F5 VPN\\f5fpc.exe",
-  "vpnHost": "vpn.trendmicro.com",
-  "userEmail": "you@trendmicro.com"
+  "vpnHost": "vpn.example.com",
+  "userEmail": "you@example.com",
+  "canaryToken": "🦎",
+  "checkIntervalSeconds": 900,
+  "reconnectDelaySeconds": 15,
+  "maxReconnectAttempts": 3
 }

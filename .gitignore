@@ -3,6 +3,7 @@ vpn-state.json
 vpn-reconnect.log
 vpn-reconnect.lock
 vpn-failures.txt
+audit.jsonl
 screenshots/
 screenshots-debug/
 __pycache__/

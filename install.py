@@ -3,7 +3,7 @@
 
 Usage:
     python install.py install                # Install deps + config + scheduled task
-    python install.py install --email you@trendmicro.com  # Provide email (skips manual config edit)
+    python install.py install --email you@example.com  # Provide email (skips manual config edit)
     python install.py install --headless     # Auto-approve all prompts (UAC still required)
     python install.py install --headless-safe  # Skip warnings entirely (CI/scripted use)
     python install.py uninstall              # Remove scheduled task
@@ -164,7 +164,7 @@ def win_status():
     found = False
     for name in [TASK_NAME, TASK_NAME_LOGIN] + OLD_TASKS:
         result = subprocess.run(
-            ["schtasks", "/query", "/tn", name, "/fo", "LIST"],
+            ["schtasks", "/query", "/tn", name, "/v", "/fo", "LIST"],
             capture_output=True, text=True
         )
         if result.returncode == 0:
@@ -172,7 +172,7 @@ def win_status():
             print(f"=== {name} ===")
             for line in result.stdout.strip().split("\n"):
                 line = line.strip()
-                if any(k in line for k in ["Status:", "Last Run", "Next Run"]):
+                if any(k in line for k in ["Status:", "Last Run", "Next Run", "Task To Run:"]):
                     print(f"  {line}")
             print()
 
@@ -337,10 +337,10 @@ def ensure_config():
         or _detect_email()
     )
 
-    if not email or email == "you@trendmicro.com":
+    if not email or email == "you@example.com":
         print(f"[FAIL] No email provided. Use one of:")
-        print(f"       --email you@trendmicro.com")
-        print(f"       VPN_USER_EMAIL=you@trendmicro.com")
+        print(f"       --email you@example.com")
+        print(f"       VPN_USER_EMAIL=you@example.com")
         print(f"       Edit {CONFIG_PATH.name} and set userEmail")
         sys.exit(1)
 

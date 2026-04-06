@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """VPN Reconnect - Unified F5 VPN reconnection"""
-import subprocess, time, sys, json, os, re, threading
+import subprocess, time, sys, json, os, re, threading, hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +9,7 @@ CONFIG_PATH = SCRIPT_DIR / "config.json"
 SCREENSHOT_DIR = SCRIPT_DIR / "screenshots"
 DEBUG_SCREENSHOT_DIR = SCRIPT_DIR / "screenshots-debug"
 LOG_FILE = SCRIPT_DIR / "vpn-reconnect.log"
+AUDIT_LOG = SCRIPT_DIR / "audit.jsonl"
 STATE_FILE = SCRIPT_DIR / "vpn-state.json"
 LOCK_FILE = SCRIPT_DIR / "vpn-reconnect.lock"
 DEBUG_MODE = "--debug" in sys.argv
@@ -30,13 +31,16 @@ try:
     with open(CONFIG_PATH) as f:
         config = json.load(f)
     F5_PATH = config.get("f5Path", _F5_DEFAULT)
-    VPN_HOST = config.get("vpnHost", "vpn.trendmicro.com")
+    VPN_HOST = config.get("vpnHost", "vpn.example.com")
     EMAIL = config.get("userEmail", "")
+    CANARY = config.get("canaryToken", "")
 except Exception as e:
     print(f"Config error: {e}")
+    config = {}
     F5_PATH = _F5_DEFAULT
-    VPN_HOST = "vpn.trendmicro.com"
+    VPN_HOST = "vpn.example.com"
     EMAIL = ""
+    CANARY = ""
 
 # Suppress console windows from subprocess calls (Windows only)
 NOWIN = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
@@ -51,6 +55,35 @@ def log(msg, level="INFO"):
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except: pass
+
+def audit(event, **data):
+    """Append a tamper-evident audit entry. Each line includes a hash of the
+    previous line so deletions/modifications are detectable."""
+    import socket
+    entry = {
+        "ts": datetime.now().isoformat(),
+        "event": event,
+        "host": socket.gethostname(),
+        "pid": os.getpid(),
+        **data,
+    }
+    # Chain hash: hash of previous last line (or seed)
+    prev_hash = "GENESIS"
+    try:
+        if AUDIT_LOG.exists():
+            with open(AUDIT_LOG, "rb") as f:
+                for line in f:
+                    pass  # seek to last line
+                prev_hash = hashlib.sha256(line.strip()).hexdigest()[:16]
+    except Exception:
+        pass
+    entry["prev"] = prev_hash
+    line = json.dumps(entry, ensure_ascii=False)
+    try:
+        with open(AUDIT_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 def take_screenshot(label=""):
     """Take screenshot in background thread to avoid blocking main flow."""
@@ -228,6 +261,7 @@ def handle_success(state):
     state["last_result"] = "success"
     state["total_successes"] += 1
     record_event(state, "success")
+    audit("vpn_connected", total=state["total_successes"])
     save_state(state)
 
 def show_stats():
@@ -391,13 +425,37 @@ def stop_f5_processes():
     return True
 
 
-def extract_mfa_number(screenshot_path=None):
-    """Screenshot the MFA number prompt and read the 2-digit number via claude -p.
+def extract_mfa_number(win=None, page_text=None):
+    """Extract the 2-digit MFA number from the SSO window.
+    Fast path: pywinauto text extraction or browser page text (~instant).
+    Fallback: screenshot + claude -p (~20s).
     Returns the number as a string, or None if not found."""
+
+    # Fast path (macOS): regex on browser page text
+    if page_text:
+        for m in re.finditer(r'\b(\d{2})\b', page_text):
+            n = int(m.group(1))
+            if 10 <= n <= 99:
+                log(f"MFA number detected via page text: {m.group(1)}")
+                return m.group(1)
+
+    # Fast path (Windows): read text elements from pywinauto window object
+    if win is not None:
+        try:
+            texts = [c.window_text() for c in win.descendants(control_type="Text")]
+            for t in texts:
+                m = re.match(r'^\s*(\d{2})\s*$', t.strip())
+                if m and 10 <= int(m.group(1)) <= 99:
+                    log(f"MFA number detected via pywinauto: {m.group(1)}")
+                    return m.group(1)
+            log(f"pywinauto texts (no match): {[t for t in texts if t.strip()]}", "WARN")
+        except Exception as e:
+            log(f"pywinauto text extraction failed: {e}", "WARN")
+
+    # Fallback: screenshot + claude -p (slow but works if window object unavailable)
     import pyautogui
     timestamp = datetime.now().strftime("%H%M%S")
-    if screenshot_path is None:
-        screenshot_path = str(SCREENSHOT_DIR / f"{timestamp}_mfa_number.png")
+    screenshot_path = str(SCREENSHOT_DIR / f"{timestamp}_mfa_number.png")
     try:
         pyautogui.screenshot(screenshot_path)
         log(f"MFA screenshot: {screenshot_path}")
@@ -405,20 +463,18 @@ def extract_mfa_number(screenshot_path=None):
         log(f"MFA screenshot failed: {e}", "WARN")
         return None
 
-    # Use claude -p to read the number from the screenshot (multimodal)
     try:
-        prompt = "This is a Microsoft MFA login screen. What is the 2-digit number shown? Reply with ONLY the number, nothing else."
+        prompt = "What is the 2-digit number shown? Reply with ONLY the number."
         result = subprocess.run(
             ["claude", "-p", prompt, screenshot_path],
             capture_output=True, text=True, timeout=30, **NOWIN,
         )
         output = result.stdout.strip()
-        # Extract 2-digit number from response
         candidates = re.findall(r'\b(\d{2})\b', output)
         for c in candidates:
             n = int(c)
             if 10 <= n <= 99:
-                log(f"MFA number detected: {c}")
+                log(f"MFA number detected via screenshot: {c}")
                 return c
         log(f"claude -p returned: {output[:100]}", "WARN")
     except subprocess.TimeoutExpired:
@@ -431,12 +487,25 @@ def extract_mfa_number(screenshot_path=None):
 
 
 def email_mfa_info(number):
-    """Email the MFA number to the user via MS Graph API. Subject only, empty body."""
+    """Email the MFA number to the user via MS Graph API.
+    Subject: just the number. Body: canary token (anti-spoof verification)."""
     if not number:
         log("No MFA number to email", "WARN")
         return False
     try:
-        sys.path.insert(0, os.path.expanduser('~/Documents/ProjectsCL1/msgraph-lib'))
+        msgraph_path = config.get("msgraphLibPath", "")
+        if not msgraph_path:
+            # Search common locations
+            for candidate in [
+                os.path.expanduser("~/Documents/ProjectsCL1/_tmemu/msgraph-lib"),
+                os.path.expanduser("~/Documents/ProjectsCL1/msgraph-lib"),
+                str(SCRIPT_DIR.parent / "msgraph-lib"),
+            ]:
+                if os.path.isdir(candidate):
+                    msgraph_path = candidate
+                    break
+        if msgraph_path:
+            sys.path.insert(0, msgraph_path)
         from token_manager import graph_post
     except Exception as e:
         log(f"Cannot load msgraph-lib: {e}", "WARN")
@@ -444,18 +513,21 @@ def email_mfa_info(number):
 
     payload = {
         "message": {
-            "subject": f"VPN MFA: {number}",
-            "body": {"contentType": "Text", "content": ""},
+            "subject": f"{number}",
+            "body": {"contentType": "Text", "content": CANARY},
             "toRecipients": [{"emailAddress": {"address": EMAIL}}],
-        }
+        },
+        "saveToSentItems": False,
     }
 
     try:
         graph_post("/me/sendMail", payload)
         log(f"MFA number {number} emailed to {EMAIL}")
+        audit("mfa_email_sent", number=number, to=EMAIL, canary=bool(CANARY))
         return True
     except Exception as e:
         log(f"MFA email failed: {e}", "ERROR")
+        audit("mfa_email_failed", number=number, error=str(e))
         return False
 
 
@@ -620,7 +692,7 @@ def main():
         log("Testing MFA email notification...")
         result = email_mfa_info("42")
         if result:
-            log("Test email sent successfully — check inbox for 'VPN MFA: 42'")
+            log("Test email sent successfully — check inbox for subject '42'")
         else:
             log("Test email FAILED — check msgraph-lib token", "ERROR")
         return 0 if result else 1
@@ -632,6 +704,7 @@ def main():
 
     log("=" * 50)
     log("VPN Reconnect Starting")
+    audit("reconnect_start", host=VPN_HOST)
     if DEBUG_MODE:
         DEBUG_SCREENSHOT_DIR.mkdir(exist_ok=True)
         for f in DEBUG_SCREENSHOT_DIR.glob("*.png"):
@@ -825,9 +898,9 @@ def _login_flow_windows():
                         link.click_input()
                         log(f"Clicked 'Use an app instead' ({time.time()-start:.1f}s)")
                         take_screenshot("use_app")
-                        time.sleep(2)  # wait for MFA number to appear
-                        # Read MFA number from screen and email it
-                        mfa_num = extract_mfa_number()
+                        time.sleep(1)  # brief wait for MFA number to render
+                        # Read MFA number from window and email it
+                        mfa_num = extract_mfa_number(win=win)
                         if mfa_num:
                             email_mfa_info(mfa_num)
                         minimize_f5_window()
@@ -953,9 +1026,10 @@ def _login_flow_mac():
                 _mac_click_link(browser_app, "Use an app instead")
                 log(f"Clicked 'Use an app instead' ({time.time()-start:.1f}s)")
                 take_screenshot("use_app")
-                time.sleep(2)  # wait for MFA number to appear
-                # Read MFA number from screen and email it
-                mfa_num = extract_mfa_number()
+                time.sleep(1)  # brief wait for MFA number to render
+                # Read MFA number from browser text and email it
+                mfa_text = _mac_get_browser_text(browser_app)
+                mfa_num = extract_mfa_number(page_text=mfa_text)
                 if mfa_num:
                     email_mfa_info(mfa_num)
                 stage = "wait"
@@ -1122,11 +1196,14 @@ def release_lock():
         pass
 
 if __name__ == "__main__":
-    if "--reset" not in sys.argv and "--stats" not in sys.argv:
+    _info_flags = {"--reset", "--stats", "--test-email"}
+    if not _info_flags.intersection(sys.argv):
         if not acquire_lock():
             sys.exit(0)
     try:
         exit_code = main()
+        if "--test-email" in sys.argv:
+            sys.exit(exit_code)
         state = load_state()
         if exit_code == 0:
             handle_success(state)
