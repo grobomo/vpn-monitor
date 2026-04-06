@@ -71,6 +71,21 @@ vpn_reconnect.py
 
 ## Remaining
 - [ ] T009: Full end-to-end test: VPN drops → task fires → email with canary → approve → connected
+  - Waiting for next natural VPN drop. Scheduled task active every 15 min.
+  - Verify: audit.jsonl gets reconnect_start + mfa_email_sent + vpn_connected chain
 - [ ] T010: Daily audit log analysis via claude -p (offsite backup + anomaly detection)
+  - claude-scheduler skill to run daily at 8am
+  - Back up audit.jsonl to S3/offsite before analysis
+  - claude -p analyzes for anomalies: unexpected hosts, rapid-fire sends, missing chain links
 - [ ] T011: system-monitor umbrella project with modules: vpn-monitor, disk-monitor, ioc-monitor
+  - New project: grobomo/system-monitor
+  - Each module: check script + health status + audit log
+  - Central daily digest email with all module reports
 - [ ] T012: ioc-monitor: Windows Event Log scanning for IOCs (failed logins, new services, suspicious processes)
+  - New module in system-monitor
+  - python-evtx or wevtutil for Event Log parsing
+  - Patterns: 4625 (failed login), 7045 (new service), 4688 (process creation)
+  - Daily report + real-time alerting for critical IOCs
+- [ ] T013: Merge PR 001-T004-fix-mfa-email-and-task-path → main
+- [ ] T014: Create CLAUDE.md for this project (architecture, security model, test instructions)
+- [ ] T015: Publish to grobomo GitHub (secret scan, sanitize any PII in code/docs)
