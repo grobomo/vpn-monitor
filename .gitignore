@@ -1,0 +1,9 @@
+config.json
+vpn-state.json
+vpn-reconnect.log
+vpn-reconnect.lock
+vpn-failures.txt
+screenshots/
+screenshots-debug/
+__pycache__/
+*.pyc
