@@ -86,6 +86,7 @@ vpn_reconnect.py
   - python-evtx or wevtutil for Event Log parsing
   - Patterns: 4625 (failed login), 7045 (new service), 4688 (process creation)
   - Daily report + real-time alerting for critical IOCs
-- [ ] T013: Merge PR 001-T004-fix-mfa-email-and-task-path → main
-- [ ] T014: Create CLAUDE.md for this project (architecture, security model, test instructions)
-- [ ] T015: Publish to grobomo GitHub (secret scan, sanitize any PII in code/docs)
+- [ ] T013: Create PR and merge 001-T004-fix-mfa-email-and-task-path → main
+- [x] T014: Create CLAUDE.md for this project
+- [x] T015: Publish to grobomo GitHub (secret-scan.yml, PII sanitized, no employer refs)
+- [ ] T016: no-adhoc-commands hook: schtasks/f5fpc blocked, points to install.py (done in hook-runner, needs commit there)
